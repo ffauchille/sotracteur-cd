@@ -1,0 +1,47 @@
+name: Continous Deployment to Scaleway
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-push-images:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Build and push frontend image
+        env:
+          IMAGE_TAG: ghcr.io/ffauchille/sotracteur-cd/sotracteur-frontend:${{ github.sha }}
+        run: |
+          docker image build -t $IMAGE_TAG .
+          docker login -u ${{ secrets.DOCKER_USER }} -p ${{ secrets.DOCKER_PASSWORD }} ghcr.io
+          docker image push $IMAGE_TAG
+  
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build-and-push-images
+    steps:
+      - name: Deploy to Scaleway
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            docker login -u ${{ secrets.DOCKER_USER }} -p ${{ secrets.DOCKER_PASSWORD }} ghcr.io
+            docker image pull ghcr.io/ffauchille/sotracteur-cd/sotracteur-frontend:${{ github.sha }}
+            docker container stop sotracteur-frontend && docker container rm sotracteur-frontend || echo "Aucun conteneur à stopper"
+            docker container run \
+              --network web \
+              --name sotracteur-frontend \
+              -d \
+              --label traefik.enable=true \
+              --label traefik.http.routers.sotracteur-frontend.tls=true \
+              --label traefik.http.routers.sotracteur-frontend.tls.certresolver=letsencrypt \
+              --label traefik.http.routers.sotracteur-frontend.rule="Host(\`sotracteur.prof.socra-sigl.fr\`)" \
+              --label traefik.http.services.sotracteur-frontend.loadbalancer.server.port=80 \
+              --label traefik.docker.network=web \
+              ghcr.io/ffauchille/sotracteur-cd/sotracteur-frontend:${{ github.sha }}     
